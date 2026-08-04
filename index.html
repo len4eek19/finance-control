@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0c2f2b" />
+    <title>Финансы — личный бюджет</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Навигация">
+        <a class="brand" href="#dashboard" aria-label="Финансы — главная">
+          <span class="brand-mark">m</span>
+          <span>Мої гроші</span>
+        </a>
+        <nav class="nav-list">
+          <button class="nav-item is-active" data-view="dashboard"><span>◌</span>Главная</button>
+          <button class="nav-item" data-view="weekly"><span>◫</span>Неделя</button>
+          <button class="nav-item" data-view="transactions"><span>≡</span>Операции</button>
+          <button class="nav-item" data-view="calendar"><span>□</span>Платежи</button>
+          <button class="nav-item" data-view="settings"><span>⚙</span>Настройки</button>
+        </nav>
+        <div class="sidebar-bottom">
+          <button class="import-button" id="open-import"><span>＋</span> Импорт выписок</button>
+          <p class="local-note"><span class="lock">⌑</span> Данные хранятся в data/finance.db — только на вашем устройстве</p>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Личный бюджет</p>
+            <h1 id="page-title">Финансовый месяц</h1>
+            <button class="period-picker" id="period-picker" type="button"><span id="period-label"></span><span>⌄</span></button>
+          </div>
+          <div class="topbar-actions">
+            <button class="icon-button" id="open-help" aria-label="О приложении">?</button>
+            <button class="avatar" id="open-settings" aria-label="Настройки">АК</button>
+          </div>
+        </header>
+
+        <section class="view is-visible" id="dashboard-view" data-view-panel="dashboard">
+          <section class="hero-grid" aria-label="Сводка бюджета">
+            <article class="summary-card income-card">
+              <div class="card-label">Доход</div>
+              <div class="summary-value" id="income-value">3 200 €</div>
+              <div class="card-foot">План на финансовый месяц</div>
+            </article>
+            <article class="summary-card fixed-card">
+              <div class="card-label">Обязательные</div>
+              <div class="summary-value" id="fixed-value">1 388 €</div>
+              <div class="card-foot" id="fixed-foot">план платежей</div>
+            </article>
+            <article class="summary-card savings-card">
+              <div class="card-label">Накопления</div>
+              <div class="summary-value"><span id="savings-actual">0 €</span><span class="of"> / <span id="savings-goal">800 €</span></span></div>
+              <div class="progress-track"><div class="progress-fill" id="savings-progress"></div></div>
+              <div class="card-foot" id="savings-foot">Добавьте перевод в накопления</div>
+            </article>
+          </section>
+
+          <section class="budget-spotlight">
+            <div>
+              <p class="eyebrow">Бюджет на гибкие траты</p>
+              <div class="spotlight-value" id="budget-remaining">1 012 €</div>
+              <p class="spotlight-caption"><span id="budget-spent">0 €</span> потрачено из <span id="budget-limit">1 012 €</span></p>
+            </div>
+            <div class="budget-meter-wrap">
+              <div class="budget-meter"><div class="budget-meter-fill" id="budget-meter-fill"></div></div>
+              <div class="budget-status" id="budget-status">Импортируйте выписку, чтобы увидеть прогресс</div>
+            </div>
+          </section>
+
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Контроль расходов</p>
+              <h2>Ритм месяца</h2>
+            </div>
+            <button class="text-button" data-view-target="transactions">Все операции <span>→</span></button>
+          </div>
+          <section class="analytics-grid">
+            <article class="panel weekly-panel">
+              <div class="panel-head">
+                <div><h3>Недельный бюджет</h3><p id="weekly-subtitle">4 периода по 208 €</p></div>
+                <span class="chip chip-neutral" id="weekly-total-chip">0 €</span>
+              </div>
+              <div id="weekly-chart" class="weekly-chart" aria-label="Расходы по неделям"></div>
+              <div class="panel-note" id="weekly-note"></div>
+            </article>
+            <article class="panel category-panel">
+              <div class="panel-head"><div><h3>Структура трат</h3><p>Без переводов и наличных</p></div></div>
+              <div class="donut-area">
+                <div class="donut" id="category-donut"><div class="donut-center"><strong id="donut-total">0 €</strong><span>расходы</span></div></div>
+                <ul class="legend" id="category-legend"></ul>
+              </div>
+            </article>
+          </section>
+
+          <section class="dashboard-bottom-grid">
+            <article class="panel insights-panel">
+              <div class="panel-head"><div><h3>Наблюдения</h3><p>На основе текущего периода</p></div><span class="spark">✦</span></div>
+              <div class="insights-list" id="insights-list"></div>
+            </article>
+            <article class="panel upcoming-panel">
+              <div class="panel-head"><div><h3>Ближайшие платежи</h3><p>План и факт</p></div><button class="text-button" data-view-target="calendar">Календарь</button></div>
+              <div id="upcoming-payments" class="upcoming-list"></div>
+            </article>
+          </section>
+
+          <section class="cash-strip" id="cash-strip">
+            <div><span class="cash-icon">⌑</span><div><strong>Наличные</strong><p>Снятия переводятся в отдельный кошелёк</p></div></div>
+            <div class="cash-balance"><span>В кошельке</span><strong id="cash-balance">0 €</strong></div>
+            <button class="secondary-button" id="open-cash-entry">+ Добавить операцию</button>
+          </section>
+        </section>
+
+        <section class="view" id="weekly-view" data-view-panel="weekly">
+          <div class="section-heading weekly-heading">
+            <div><p class="eyebrow">План на ближайшие дни</p><h2>Неделя под контролем</h2></div>
+            <span class="week-date" id="week-range"></span>
+          </div>
+          <section class="week-hero">
+            <div class="week-hero-main"><p class="eyebrow">Можно потратить до конца недели</p><strong id="week-available">208 €</strong><p id="week-available-caption">из недельного лимита</p></div>
+            <div class="week-hero-stat"><span>Ориентир на день</span><strong id="week-daily">0 €</strong><small id="week-days-left">—</small></div>
+            <div class="week-hero-stat"><span>Потрачено</span><strong id="week-spent">0 €</strong><small id="week-spent-caption">по гибким категориям</small></div>
+          </section>
+          <div class="section-heading compact-heading"><div><p class="eyebrow">Конверты недели</p><h2>На что ещё можно</h2></div><p class="rollover-caption" id="rollover-caption"></p></div>
+          <section class="week-envelopes" id="week-envelopes"></section>
+          <section class="weekly-workspace">
+            <article class="panel shopping-panel">
+              <div class="panel-head"><div><h3>Список покупок</h3><p>Планируйте корзину до похода в магазин</p></div><span class="shopping-total" id="shopping-total">0 €</span></div>
+              <form id="shopping-form" class="shopping-form">
+                <input name="name" required maxlength="80" placeholder="Например: овощи и фрукты" aria-label="Позиция в списке покупок" />
+                <input name="price" required min="0.01" step="0.01" type="number" placeholder="€" aria-label="Ожидаемая цена" />
+                <select name="bucket" aria-label="Тип покупки"><option value="big-shop">Основная закупка</option><option value="midweek">Докупка</option></select>
+                <select name="essential" aria-label="Важность"><option value="1">Обязательное</option><option value="0">Можно отложить</option></select>
+                <button class="primary-button" type="submit">Добавить</button>
+              </form>
+              <div class="shopping-budgets" id="shopping-budgets"></div>
+              <div class="shopping-list" id="shopping-list"></div>
+            </article>
+            <aside class="panel weekly-guide" id="weekly-guide"></aside>
+          </section>
+        </section>
+
+        <section class="view" id="transactions-view" data-view-panel="transactions">
+          <div class="section-heading transactions-heading">
+            <div><p class="eyebrow">Импорт и ручные траты</p><h2>Операции</h2></div>
+            <div class="heading-actions"><button class="secondary-button" id="transactions-import">Импорт CSV</button><button class="primary-button" id="transactions-cash">+ Операция</button></div>
+          </div>
+          <section class="filter-bar">
+            <div class="filter-group" id="type-filters">
+              <button class="filter is-selected" data-filter="all">Все</button>
+              <button class="filter" data-filter="expense">Расходы</button>
+              <button class="filter" data-filter="review">Проверить</button>
+              <button class="filter" data-filter="transfer">Переводы</button>
+            </div>
+            <label class="search-box"><span>⌕</span><input id="transaction-search" placeholder="Поиск по продавцу или категории" /></label>
+          </section>
+          <section class="transactions-panel panel">
+            <div class="transaction-table-head"><span>Операция</span><span>Категория</span><span>Сумма</span></div>
+            <div id="transactions-list" class="transactions-list"></div>
+          </section>
+        </section>
+
+        <section class="view" id="calendar-view" data-view-panel="calendar">
+          <div class="section-heading"><div><p class="eyebrow">Повторяющиеся обязательства</p><h2>Календарь платежей</h2></div><button class="secondary-button" id="open-payment-edit">Редактировать план</button></div>
+          <section class="calendar-summary panel"><div><span>Запланировано</span><strong id="calendar-total">1 388 €</strong></div><div><span>Отмечено оплаченным</span><strong id="calendar-paid">0 €</strong></div><div><span>Ожидает</span><strong id="calendar-pending">1 388 €</strong></div></section>
+          <div id="calendar-list" class="calendar-list"></div>
+        </section>
+
+        <section class="view" id="settings-view" data-view-panel="settings">
+          <div class="section-heading"><div><p class="eyebrow">Данные и правила</p><h2>Настройки</h2></div></div>
+          <div class="settings-grid">
+            <form class="panel settings-form" id="budget-form">
+              <div class="panel-head"><div><h3>План месяца</h3><p>Задаёт границы дашборда</p></div></div>
+              <label>Доход, €<input name="income" type="number" min="0" step="1" /></label>
+              <label>Цель накоплений, €<input name="savingsGoal" type="number" min="0" step="1" /></label>
+              <label>Лимит недели, €<input name="weeklyLimit" type="number" min="0" step="1" /></label>
+              <label>Нераспределённый резерв, €<input name="reserve" type="number" min="0" step="1" /></label>
+              <button class="primary-button" type="submit">Сохранить план</button>
+            </form>
+            <form class="panel settings-form" id="fx-form">
+              <div class="panel-head"><div><h3>Курсы для импорта</h3><p>Для операций не в EUR</p></div></div>
+              <label>UAH за 1 EUR<input name="uahPerEur" type="number" min="1" step="0.01" /></label>
+              <label>USD за 1 EUR<input name="usdPerEur" type="number" min="0.1" step="0.01" /></label>
+              <p class="form-hint">EUR используется без конвертации, BGN — по фиксированному 1,95583.</p>
+              <button class="primary-button" type="submit">Сохранить курсы</button>
+            </form>
+            <section class="panel data-panel">
+              <div class="panel-head"><div><h3>Ваши данные</h3><p>SQLite на этом устройстве</p></div></div>
+              <div class="data-stats"><div><strong id="data-count">0</strong><span>операций</span></div><div><strong id="account-count">0</strong><span>источников</span></div></div>
+              <p class="database-status" id="database-status">Подключение к локальной базе…</p>
+              <div class="data-actions"><button class="secondary-button" id="export-backup">Экспорт JSON</button><button class="danger-button" id="clear-data">Удалить все данные</button></div>
+            </section>
+          </div>
+          <section class="panel bot-panel">
+            <div class="panel-head"><div><h3>Telegram бот</h3><p>Отправляйте выписки и расходы прямо в группу</p></div></div>
+            <details class="bot-setup-local">
+              <summary>Локальный режим (бот на этом компьютере)</summary>
+              <ol class="bot-steps">
+                <li>В <strong>@BotFather</strong>: /newbot → скопируй токен в <code>data/bot.json → "token"</code></li>
+                <li>Запусти <strong>Запустить бота.cmd</strong></li>
+                <li>Добавь бота в группу Telegram</li>
+                <li>В BotFather: /mybots → Bot Settings → Group Privacy → <strong>Disable</strong></li>
+                <li>Отправляй CSV-выписки или пиши расходы через <code>/add</code></li>
+              </ol>
+            </details>
+            <details class="bot-setup-cloud">
+              <summary>Облачный режим (бот работает 24/7 без компьютера)</summary>
+              <ol class="bot-steps">
+                <li>Загрузи проект на <strong>GitHub</strong></li>
+                <li>Зайди на <strong>railway.app</strong> → New Project → Deploy from GitHub → выбери репо</li>
+                <li>В Variables добавь:<br>
+                  <code>BOT_TOKEN</code> — токен от @BotFather<br>
+                  <code>ALLOWED_CHAT_IDS</code> — ID группы (например <code>-123456789</code>)<br>
+                  <code>API_KEY</code> — любой случайный секрет (например <code>openssl rand -hex 16</code>)
+                </li>
+                <li>После деплоя скопируй URL сервиса (вида <code>https://…railway.app</code>)</li>
+                <li>Вставь в <code>data/bot.json</code>:<br>
+                  <code>"cloud_bot_url": "https://…railway.app"</code><br>
+                  <code>"cloud_sync_key": "тот же API_KEY"</code>
+                </li>
+              </ol>
+            </details>
+            <div class="bot-actions-row">
+              <div id="bot-import-wrap" hidden>
+                <div id="bot-import-info" class="bot-pending-badge"></div>
+                <button class="primary-button" id="bot-import-btn">Импортировать CSV из Telegram</button>
+              </div>
+              <button class="secondary-button" id="cloud-sync-btn">Синхронизировать с облаком</button>
+            </div>
+          </section>
+          <section class="panel rules-panel"><div class="panel-head"><div><h3>Как приложение считает деньги</h3></div></div><ul><li>Положительные операции — доходы; расходы с MCC 4829 без парной операции помечаются для проверки.</li><li>Снятие наличных попадает в кошелёк наличных, а не в структуру расходов.</li><li>Ручная категория всегда приоритетнее автоматического правила.</li></ul></section>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <dialog id="import-dialog" class="dialog import-dialog">
+      <form method="dialog" id="import-form">
+        <div class="dialog-head"><div><p class="eyebrow">Новые операции</p><h2>Импорт CSV-выписок</h2></div><button type="button" class="close-button" data-close-dialog="import-dialog" aria-label="Закрыть">×</button></div>
+        <p class="dialog-copy">Файлы остаются на вашем устройстве. Повторные строки будут пропущены автоматически.</p>
+        <label class="file-drop"><input id="csv-files" type="file" accept=".csv,text/csv" multiple required /><span class="file-icon">⇧</span><strong>Выберите CSV-файлы</strong><small>Поддерживается экспорт Monobank / стандартный CSV</small></label>
+        <label>Название источника <input id="import-account" type="text" placeholder="Например: EUR-карта" /><small>Если выбрано несколько файлов, имя каждого файла станет отдельным источником.</small></label>
+        <div id="import-preview" class="import-preview" hidden></div>
+        <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="import-dialog">Отмена</button><button class="primary-button" id="import-submit" type="submit">Импортировать</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="cash-dialog" class="dialog compact-dialog">
+      <form method="dialog" id="cash-form">
+        <div class="dialog-head"><div><p class="eyebrow">Быстрое добавление</p><h2>Новая операция</h2></div><button type="button" class="close-button" data-close-dialog="cash-dialog" aria-label="Закрыть">×</button></div>
+        <div class="form-grid"><label>Тип<select name="entryType"><option value="expense">Расход</option><option value="income">Доход</option><option value="transfer">Перевод</option></select></label><label>Источник<select name="source"><option value="cash">Кошелёк наличных</option><option value="manual">Вручную</option></select></label></div>
+        <div class="form-grid"><label>Сумма, €<input name="amount" type="number" min="0.01" step="0.01" required /></label><label>Дата<input name="date" type="date" required /></label></div>
+        <label>Категория<select name="category" id="cash-category"></select></label>
+        <label>Заметка <input name="description" type="text" placeholder="Например: овощной рынок" /></label>
+        <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="cash-dialog">Отмена</button><button class="primary-button" type="submit">Добавить</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="payment-dialog" class="dialog compact-dialog">
+      <form method="dialog" id="payment-form">
+        <div class="dialog-head"><div><p class="eyebrow">План платежей</p><h2>Редактировать</h2></div><button type="button" class="close-button" data-close-dialog="payment-dialog" aria-label="Закрыть">×</button></div>
+        <div id="payment-form-list" class="payment-form-list"></div>
+        <div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="payment-dialog">Отмена</button><button class="primary-button" type="submit">Сохранить план</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="help-dialog" class="dialog compact-dialog">
+      <form method="dialog"><div class="dialog-head"><div><p class="eyebrow">О приложении</p><h2>Ваш бюджет, без облака</h2></div><button class="close-button" value="cancel" aria-label="Закрыть">×</button></div><p class="dialog-copy">Выписки обрабатываются на этом устройстве и хранятся в локальной SQLite-базе. Перед очисткой данных выгрузите резервную копию.</p><div class="dialog-actions"><button class="primary-button" value="cancel">Понятно</button></div></form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>

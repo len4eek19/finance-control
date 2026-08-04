@@ -1,0 +1,10 @@
+data/bot.json
+data/bot-queue.json
+data/finance.db
+data/finance.db-*
+bot-imports/
+__pycache__/
+.pytest_cache/
+tests/__pycache__/
+docs/superpowers/
+finance-control/
