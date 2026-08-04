@@ -614,7 +614,7 @@ async function importBotFiles() {
 
 async function cloudSync() {
   const btn = $('#cloud-sync-btn');
-  if (btn) btn.disabled = true;
+  if (btn) { btn.classList.add('is-spinning'); btn.disabled = true; }
   try {
     const r = await fetch('/api/cloud-sync', { cache: 'no-store' }).then(x => x.json());
     if (r.ok) {
@@ -630,7 +630,7 @@ async function cloudSync() {
   } catch {
     showToast('Нет связи с сервером', 'error');
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) { btn.classList.remove('is-spinning'); btn.disabled = false; }
   }
 }
 

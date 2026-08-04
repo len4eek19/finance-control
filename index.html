@@ -37,6 +37,7 @@
             <button class="period-picker" id="period-picker" type="button"><span id="period-label"></span><span>⌄</span></button>
           </div>
           <div class="topbar-actions">
+            <button class="icon-button" id="cloud-sync-btn" aria-label="Синхронизировать с облаком" title="Синхронизировать с облаком">↻</button>
             <button class="icon-button" id="open-help" aria-label="О приложении">?</button>
             <button class="avatar" id="open-settings" aria-label="Настройки">АК</button>
           </div>
@@ -231,7 +232,6 @@
                 <div id="bot-import-info" class="bot-pending-badge"></div>
                 <button class="primary-button" id="bot-import-btn">Импортировать CSV из Telegram</button>
               </div>
-              <button class="secondary-button" id="cloud-sync-btn">Синхронизировать с облаком</button>
             </div>
           </section>
           <section class="panel rules-panel"><div class="panel-head"><div><h3>Как приложение считает деньги</h3></div></div><ul><li>Положительные операции — доходы; расходы с MCC 4829 без парной операции помечаются для проверки.</li><li>Снятие наличных попадает в кошелёк наличных, а не в структуру расходов.</li><li>Ручная категория всегда приоритетнее автоматического правила.</li></ul></section>

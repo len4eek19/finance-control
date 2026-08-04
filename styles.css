@@ -41,6 +41,8 @@ h3 { margin: 0 0 4px; font-size: 15px; letter-spacing: -.25px; }
 .period-picker { color: var(--muted); padding: 0; font-weight: 600; font-size: 13px; display: flex; gap: 6px; align-items: center; }
 .topbar-actions { display: flex; align-items: center; gap: 11px; }
 .icon-button { width: 36px; height: 36px; color: var(--muted); border: 1px solid var(--line); border-radius: 50%; font-weight: 700; }
+.icon-button.is-spinning { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .avatar { width: 38px; height: 38px; color: var(--deep); background: var(--accent); border-radius: 50%; font-size: 11px; font-weight: 700; }
 .hero-grid { display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 14px; }
 .summary-card { border-radius: 14px; min-height: 137px; padding: 21px; position: relative; overflow: hidden; }
