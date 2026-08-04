@@ -574,8 +574,8 @@ function updateBotNotification() {
     info.textContent = '';
   }
 }
-async function importBotFiles() {
-  if (!pendingBotFiles.length) return;
+async function importBotFiles(silent = false) {
+  if (!pendingBotFiles.length) return { added: 0, duplicate: 0, invalid: 0 };
   const existingIds = new Set(state.transactions.map(tx => tx.id));
   let added = 0, duplicate = 0, invalid = 0;
   const completedFiles = [];
@@ -609,23 +609,33 @@ async function importBotFiles() {
   pendingBotFiles = [...new Set(failedFiles)];
   updateBotNotification();
   saveState(); renderAll();
-  showToast(`Telegram: добавлено ${added}, дублей ${duplicate}${invalid ? `, не прочитано ${invalid}` : ''}${pendingBotFiles.length ? `, ожидают повтора ${pendingBotFiles.length}` : ''}`);
+  if (!silent) showToast(`Telegram: добавлено ${added}, дублей ${duplicate}${invalid ? `, не прочитано ${invalid}` : ''}${pendingBotFiles.length ? `, ожидают повтора ${pendingBotFiles.length}` : ''}`);
+  return { added, duplicate, invalid };
 }
 
 async function cloudSync() {
   const btn = $('#cloud-sync-btn');
   if (btn) { btn.classList.add('is-spinning'); btn.disabled = true; }
   try {
+    // 1. Pull expenses + CSV files from cloud bot into local SQLite / bot-imports/
     const r = await fetch('/api/cloud-sync', { cache: 'no-store' }).then(x => x.json());
-    if (r.ok) {
-      if (r.imported_expenses || r.imported_csvs) {
-        await initialize();
-        showToast(`Синхронизировано: ${r.imported_expenses} операций, ${r.imported_csvs} CSV`);
-      } else {
-        showToast('Нет новых данных от бота');
-      }
+    if (!r.ok) { showToast(r.reason || 'Ошибка синхронизации', 'error'); return; }
+
+    // 2. Reload JS state from SQLite so bot expenses are in state before CSV import
+    await hydrateState();
+
+    // 3. Auto-import any CSV files that were just saved to bot-imports/
+    await checkBotFiles();
+    const csvResult = pendingBotFiles.length > 0 ? await importBotFiles(true) : { added: 0 };
+
+    // 4. Re-render (importBotFiles already renders if it ran, but re-render is safe)
+    renderAll();
+
+    const totalOps = (r.imported_expenses || 0) + (csvResult.added || 0);
+    if (totalOps > 0 || r.imported_csvs > 0) {
+      showToast(`Синхронизировано: ${totalOps} операций${r.imported_csvs ? `, ${r.imported_csvs} CSV` : ''}`);
     } else {
-      showToast(r.reason || 'Ошибка синхронизации', 'error');
+      showToast('Нет новых данных от бота');
     }
   } catch {
     showToast('Нет связи с сервером', 'error');
