@@ -535,13 +535,12 @@ def _build_app(token: str, allowed: list[int]) -> Application:
 # ─────────────────────────────────────────── entry points ──
 
 async def _run_cloud(token: str, allowed: list[int], api_key: str, http_port: int) -> None:
-    bot_app = _build_app(token, allowed)
-
-    runner  = aio_web.AppRunner(_make_web_app(api_key))
+    # HTTP sync API must always be available — start it first, independently
+    runner = aio_web.AppRunner(_make_web_app(api_key))
     await runner.setup()
     site = aio_web.TCPSite(runner, "0.0.0.0", http_port)
     await site.start()
-    log.info("HTTP sync API listening on port %d", http_port)
+    log.info("HTTP sync API on :%d", http_port)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -551,16 +550,33 @@ async def _run_cloud(token: str, allowed: list[int], api_key: str, http_port: in
         except (NotImplementedError, OSError):
             pass  # Windows doesn't support add_signal_handler
 
-    async with bot_app:
-        await bot_app.start()
-        await bot_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-        log.info("Bot polling started (cloud mode)")
+    # Telegram bot runs as a background task — its failure won't take down HTTP API
+    bot_app = _build_app(token, allowed)
+
+    async def run_telegram() -> None:
         try:
-            await stop.wait()
-        except asyncio.CancelledError:
-            pass
-        await bot_app.updater.stop()
-        await bot_app.stop()
+            async with bot_app:
+                await bot_app.start()
+                await bot_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+                log.info("Telegram polling started (cloud mode)")
+                await stop.wait()
+                await bot_app.updater.stop()
+                await bot_app.stop()
+        except Exception:
+            log.exception("Telegram bot error — HTTP API still running")
+
+    tg_task = asyncio.create_task(run_telegram())
+
+    try:
+        await stop.wait()
+    except asyncio.CancelledError:
+        stop.set()
+
+    tg_task.cancel()
+    try:
+        await tg_task
+    except (asyncio.CancelledError, Exception):
+        pass
 
     await runner.cleanup()
 
