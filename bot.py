@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac as _hmac
 import io
 import json
 import logging
@@ -114,6 +116,26 @@ def cat_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+# ─────────────────────────────────────────── security helpers ──
+
+def _constant_eq(a: str, b: str) -> bool:
+    """Constant-time string comparison to prevent timing attacks."""
+    return _hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+def _canonical(data: dict) -> bytes:
+    """Stable JSON bytes for HMAC signing (no 'sig' key, sorted)."""
+    return json.dumps(
+        {k: v for k, v in data.items() if k != "sig"},
+        separators=(",", ":"), sort_keys=True, ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _sign(data: dict, key: str) -> str:
+    """HMAC-SHA256 over canonical JSON."""
+    return _hmac.new(key.encode("utf-8"), _canonical(data), hashlib.sha256).hexdigest()
+
+
 # ─────────────────────────────────────────── pending queue (cloud) ──
 
 _queue_lock = threading.Lock()
@@ -125,7 +147,7 @@ def _q_load() -> dict:
             return json.loads(QUEUE_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"expenses": [], "csv_files": []}
+    return {"seq": 0, "expenses": [], "csv_files": []}
 
 
 def _q_save(data: dict) -> None:
@@ -139,6 +161,7 @@ def queue_add_expense(payload: dict) -> None:
     with _queue_lock:
         data = _q_load()
         data["expenses"].append(payload)
+        data["seq"] = data.get("seq", 0) + 1
         _q_save(data)
 
 
@@ -146,6 +169,7 @@ def queue_add_csv(filename: str, content_b64: str) -> None:
     with _queue_lock:
         data = _q_load()
         data["csv_files"].append({"filename": filename, "content": content_b64})
+        data["seq"] = data.get("seq", 0) + 1
         _q_save(data)
 
 
@@ -154,14 +178,19 @@ def queue_snapshot() -> dict:
         return _q_load()
 
 
-def queue_ack(expense_ids: list[str], csv_filenames: list[str]) -> None:
+def queue_ack(expense_ids: list[str], csv_filenames: list[str],
+              expected_seq: int | None = None) -> bool:
+    """Remove acknowledged items. Returns False on seq conflict."""
     id_set = set(expense_ids)
     fn_set = set(csv_filenames)
     with _queue_lock:
         data = _q_load()
+        if expected_seq is not None and data.get("seq", 0) != expected_seq:
+            return False  # stale ack — caller should re-fetch
         data["expenses"]  = [e for e in data["expenses"]  if e.get("id")       not in id_set]
         data["csv_files"] = [f for f in data["csv_files"] if f.get("filename") not in fn_set]
         _q_save(data)
+    return True
 
 
 # ─────────────────────────────────────────── database helpers (local) ──
@@ -464,39 +493,123 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 # ─────────────────────────────────────────── HTTP API (cloud mode) ──
 
-def _make_web_app(api_key: str) -> "aio_web.Application":
-    app = aio_web.Application()
+def _make_web_app(api_key: str, allowed_origin: str = "") -> "aio_web.Application":
+    sync_lock = asyncio.Lock()
 
-    def _check_key(request: "aio_web.Request") -> None:
-        key = request.headers.get("X-API-Key") or request.rel_url.query.get("key", "")
-        if api_key and key != api_key:
-            raise aio_web.HTTPForbidden(reason="Invalid API key")
+    # ── CORS middleware ──────────────────────────────────────────────────────
+    @aio_web.middleware
+    async def cors_mw(request: "aio_web.Request", handler) -> "aio_web.Response":
+        # Allow preflight before auth check
+        if request.method == "OPTIONS":
+            resp = aio_web.Response(status=204)
+        else:
+            resp = await handler(request)
+        origin = request.headers.get("Origin", "")
+        if not allowed_origin or origin == allowed_origin:
+            resp.headers["Access-Control-Allow-Origin"] = origin or "*"
+        resp.headers["Access-Control-Allow-Headers"] = "X-API-Key, Content-Type"
+        resp.headers["Access-Control-Allow-Methods"]  = "GET, POST, OPTIONS"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        return resp
 
+    app = aio_web.Application(middlewares=[cors_mw])
+
+    # ── auth helper ──────────────────────────────────────────────────────────
+    def _require_key(request: "aio_web.Request") -> None:
+        if not api_key:
+            return
+        # Key only via header — never via query param (avoids logging leaks)
+        provided = request.headers.get("X-API-Key", "")
+        if not provided or not _constant_eq(provided, api_key):
+            raise aio_web.HTTPForbidden(
+                content_type="application/json",
+                body=b'{"error":"unauthorized"}',
+            )
+
+    # ── routes ───────────────────────────────────────────────────────────────
     async def health(request: "aio_web.Request") -> "aio_web.Response":
         data = queue_snapshot()
         return aio_web.json_response({
-            "ok": True,
-            "mode": "cloud",
+            "ok":              True,
+            "mode":            "cloud",
             "pending_expenses": len(data.get("expenses", [])),
             "pending_csvs":     len(data.get("csv_files", [])),
         })
 
     async def pending(request: "aio_web.Request") -> "aio_web.Response":
-        _check_key(request)
-        return aio_web.json_response(queue_snapshot())
+        _require_key(request)
+        async with sync_lock:
+            data = queue_snapshot()
+
+        payload: dict = {
+            "seq":       data.get("seq", 0),
+            "expenses":  data.get("expenses", []),
+            "csv_files": data.get("csv_files", []),
+        }
+        # Sign response so the local app can verify authenticity
+        if api_key:
+            payload["sig"] = _sign(payload, api_key)
+
+        return aio_web.json_response(payload)
 
     async def ack(request: "aio_web.Request") -> "aio_web.Response":
-        _check_key(request)
-        body = await request.json()
-        queue_ack(
-            body.get("expense_ids", []),
-            body.get("csv_filenames", []),
-        )
+        _require_key(request)
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise aio_web.HTTPBadRequest(
+                content_type="application/json",
+                body=b'{"error":"invalid_json"}',
+            )
+
+        if not isinstance(body, dict):
+            raise aio_web.HTTPBadRequest(
+                content_type="application/json",
+                body=b'{"error":"expected_object"}',
+            )
+
+        expense_ids   = body.get("expense_ids", [])
+        csv_filenames = body.get("csv_filenames", [])
+        seq           = body.get("seq")
+
+        # Strict type + length guards
+        def _valid_str_list(v: object) -> bool:
+            return (
+                isinstance(v, list)
+                and all(isinstance(x, str) and 0 < len(x) < 256 for x in v)
+            )
+
+        if expense_ids and not _valid_str_list(expense_ids):
+            raise aio_web.HTTPBadRequest(
+                content_type="application/json",
+                body=b'{"error":"invalid_expense_ids"}',
+            )
+        if csv_filenames and not _valid_str_list(csv_filenames):
+            raise aio_web.HTTPBadRequest(
+                content_type="application/json",
+                body=b'{"error":"invalid_csv_filenames"}',
+            )
+
+        async with sync_lock:
+            ok = queue_ack(
+                [x for x in expense_ids   if isinstance(x, str)],
+                [x for x in csv_filenames if isinstance(x, str)],
+                expected_seq=int(seq) if isinstance(seq, (int, float)) else None,
+            )
+
+        if not ok:
+            return aio_web.json_response(
+                {"ok": False, "error": "seq_conflict",
+                 "hint": "Queue changed since last fetch — re-call /api/pending"},
+                status=409,
+            )
         return aio_web.json_response({"ok": True})
 
-    app.router.add_get("/health",       health)
-    app.router.add_get("/api/pending",  pending)
-    app.router.add_post("/api/ack",     ack)
+    app.router.add_get( "/health",              health)
+    app.router.add_get( "/api/pending",         pending)
+    app.router.add_post("/api/ack",             ack)
+    app.router.add_route("OPTIONS", "/{tail:.*}", lambda r: aio_web.Response(status=204))
     return app
 
 
@@ -535,8 +648,9 @@ def _build_app(token: str, allowed: list[int]) -> Application:
 # ─────────────────────────────────────────── entry points ──
 
 async def _run_cloud(token: str, allowed: list[int], api_key: str, http_port: int) -> None:
+    allowed_origin = os.environ.get("ALLOWED_ORIGIN", "")
     # HTTP sync API must always be available — start it first, independently
-    runner = aio_web.AppRunner(_make_web_app(api_key))
+    runner = aio_web.AppRunner(_make_web_app(api_key, allowed_origin))
     await runner.setup()
     site = aio_web.TCPSite(runner, "0.0.0.0", http_port)
     await site.start()

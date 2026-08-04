@@ -1,7 +1,9 @@
 data/bot.json
+data/cloud.json
 data/bot-queue.json
 data/finance.db
 data/finance.db-*
+data/backups/
 bot-imports/
 __pycache__/
 .pytest_cache/

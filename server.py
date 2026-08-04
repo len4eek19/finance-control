@@ -7,6 +7,8 @@ stores data in data/finance.db, and never sends statements outside the device.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac as _hmac
 import json
 import re
 import sqlite3
@@ -221,33 +223,111 @@ def statistics(start: str | None, end: str | None) -> dict:
     return {"from": start, "to": end, "total": total, "categories": categories}
 
 
+# ── cloud credentials ──────────────────────────────────────────────────────────
+
+def _load_cloud_config() -> dict:
+    """Load cloud sync credentials.
+
+    Priority: data/cloud.json → data/bot.json (backward compat).
+    Keeping credentials in data/cloud.json separates bot config from sync config.
+    """
+    cloud_file = DATA_DIR / "cloud.json"
+    if cloud_file.exists():
+        try:
+            cfg = json.loads(cloud_file.read_text(encoding="utf-8"))
+            if cfg.get("url"):
+                return {"url": cfg["url"].rstrip("/"), "key": cfg.get("key", "")}
+        except Exception:
+            pass
+    # Backward-compat: read from bot.json
+    bot_file = DATA_DIR / "bot.json"
+    if bot_file.exists():
+        try:
+            cfg = json.loads(bot_file.read_text(encoding="utf-8"))
+            url = cfg.get("cloud_bot_url", "").rstrip("/")
+            key = cfg.get("cloud_sync_key", "")
+            if url:
+                return {"url": url, "key": key}
+        except Exception:
+            pass
+    return {}
+
+
+# ── HMAC helpers ───────────────────────────────────────────────────────────────
+
+def _canonical(data: dict) -> bytes:
+    return json.dumps(
+        {k: v for k, v in data.items() if k != "sig"},
+        separators=(",", ":"), sort_keys=True, ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _verify_sig(data: dict, key: str) -> bool:
+    """Verify HMAC-SHA256 signature from cloud bot response."""
+    sig = data.get("sig", "")
+    if not sig:
+        return True  # unsigned response accepted (key not configured)
+    expected = _hmac.new(key.encode("utf-8"), _canonical(data), hashlib.sha256).hexdigest()
+    return _hmac.compare_digest(sig, expected)
+
+
+# ── database backup ────────────────────────────────────────────────────────────
+
+def backup_database() -> str | None:
+    """Create a timestamped SQLite backup in data/backups/. Keeps last 7."""
+    if not DATABASE.exists():
+        return None
+    backups_dir = DATA_DIR / "backups"
+    backups_dir.mkdir(exist_ok=True)
+    timestamp   = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = backups_dir / f"finance-{timestamp}.db"
+    try:
+        src = sqlite3.connect(str(DATABASE))
+        dst = sqlite3.connect(str(backup_path))
+        src.backup(dst)
+        dst.close()
+        src.close()
+        # Retain only the 7 most recent backups
+        for old in sorted(backups_dir.glob("finance-*.db"))[:-7]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        return str(backup_path)
+    except Exception:
+        if backup_path.exists():
+            try:
+                backup_path.unlink()
+            except OSError:
+                pass
+        return None
+
+
 def sync_from_cloud_bot() -> dict:
     """Fetch pending expenses and CSV files from the cloud bot and import them.
 
-    Reads cloud_bot_url and cloud_sync_key from data/bot.json.
-    Returns a status dict suitable for JSON serialisation.
+    Reads credentials from data/cloud.json (fallback: data/bot.json).
+    Verifies HMAC signature on the response before importing anything.
+    Creates a local SQLite backup before touching the database.
+    Sends seq in the ack to detect stale/concurrent syncs.
     """
-    config_file = DATA_DIR / "bot.json"
-    if not config_file.exists():
-        return {"ok": False, "reason": "data/bot.json not found"}
-
-    try:
-        config = json.loads(config_file.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {"ok": False, "reason": f"Cannot read bot.json: {exc}"}
-
-    url = config.get("cloud_bot_url", "").rstrip("/")
-    key = config.get("cloud_sync_key", "")
+    config = _load_cloud_config()
+    url = config.get("url", "")
+    key = config.get("key", "")
     if not url:
-        return {"ok": False, "reason": "cloud_bot_url not configured in data/bot.json"}
+        return {"ok": False, "reason": "cloud sync not configured — add url to data/cloud.json"}
     if not key:
-        return {"ok": False, "reason": "cloud_sync_key not configured in data/bot.json"}
+        return {"ok": False, "reason": "cloud sync not configured — add key to data/cloud.json"}
 
-    headers = {"X-API-Key": key, "User-Agent": "FinanceControl/1.0"}
+    headers = {
+        "X-API-Key":  key,
+        "User-Agent": "FinanceControl/1.0",
+        "Accept":     "application/json",
+    }
 
     # ── fetch queue ──────────────────────────────────────────────────────────
     try:
-        req  = urllib.request.Request(f"{url}/api/pending", headers=headers)
+        req = urllib.request.Request(f"{url}/api/pending", headers=headers)
         with urllib.request.urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
@@ -255,8 +335,19 @@ def sync_from_cloud_bot() -> dict:
     except Exception as exc:
         return {"ok": False, "reason": str(exc)}
 
+    # ── verify HMAC signature ────────────────────────────────────────────────
+    if not _verify_sig(data, key):
+        return {"ok": False, "reason": "HMAC signature verification failed — possible tampering"}
+
+    seq       = data.get("seq")
     expenses  = [e for e in data.get("expenses", [])  if isinstance(e, dict) and e.get("id")]
     csv_files = [f for f in data.get("csv_files", []) if isinstance(f, dict) and f.get("filename")]
+
+    if not expenses and not csv_files:
+        return {"ok": True, "imported_expenses": 0, "imported_csvs": 0}
+
+    # ── backup before modifying local data ───────────────────────────────────
+    backup_path = backup_database()
 
     imported_expenses = 0
     imported_csvs     = 0
@@ -311,26 +402,32 @@ def sync_from_cloud_bot() -> dict:
             except Exception:
                 pass
 
-    # ── acknowledge processed items ──────────────────────────────────────────
+    # ── acknowledge with seq (conflict guard) ─────────────────────────────────
     if ack_expense_ids or ack_csv_names:
         try:
-            ack_body = json.dumps(
-                {"expense_ids": ack_expense_ids, "csv_filenames": ack_csv_names}
-            ).encode("utf-8")
+            ack_body = json.dumps({
+                "expense_ids":   ack_expense_ids,
+                "csv_filenames": ack_csv_names,
+                "seq":           seq,
+            }).encode("utf-8")
             ack_req = urllib.request.Request(
                 f"{url}/api/ack",
                 data=ack_body,
                 headers={**headers, "Content-Type": "application/json"},
                 method="POST",
             )
-            urllib.request.urlopen(ack_req, timeout=10)
+            with urllib.request.urlopen(ack_req, timeout=10) as ack_resp:
+                ack_data = json.loads(ack_resp.read().decode("utf-8"))
+            if not ack_data.get("ok") and ack_data.get("error") == "seq_conflict":
+                return {"ok": False, "reason": "sync conflict — retry to re-fetch latest queue"}
         except Exception:
-            pass  # ack failure is non-fatal — items stay in queue
+            pass  # non-fatal: items remain in cloud queue for next sync
 
     return {
-        "ok": True,
+        "ok":                True,
         "imported_expenses": imported_expenses,
         "imported_csvs":     imported_csvs,
+        "backup":            backup_path,
     }
 
 
@@ -377,6 +474,12 @@ class FinanceHandler(SimpleHTTPRequestHandler):
             self.json_response({"files": files})
         elif parsed.path == "/api/cloud-sync":
             self.json_response(sync_from_cloud_bot())
+        elif parsed.path == "/api/backup":
+            path = backup_database()
+            if path:
+                self.json_response({"ok": True, "path": path})
+            else:
+                self.json_response({"ok": False, "reason": "backup failed or database not found"}, HTTPStatus.INTERNAL_SERVER_ERROR)
         elif parsed.path == "/api/state":
             self.json_response(database_state())
         elif parsed.path == "/api/stats":
