@@ -34,7 +34,12 @@
           <div>
             <p class="eyebrow">Личный бюджет</p>
             <h1 id="page-title">Финансовый месяц</h1>
-            <button class="period-picker" id="period-picker" type="button"><span id="period-label"></span><span>⌄</span></button>
+            <div class="period-controls">
+              <button class="secondary-button" id="period-prev" type="button" aria-label="Предыдущий финансовый месяц">←</button>
+              <button class="period-picker" id="period-picker" type="button"><span id="period-label"></span><span>⌄</span></button>
+              <button class="secondary-button" id="period-next" type="button" aria-label="Следующий финансовый месяц">→</button>
+              <button class="text-button" id="period-current" type="button">Текущий</button>
+            </div>
           </div>
           <div class="topbar-actions">
             <button class="icon-button" id="cloud-sync-btn" aria-label="Синхронизировать с облаком" title="Синхронизировать с облаком">↻</button>
@@ -68,10 +73,12 @@
               <p class="eyebrow">Бюджет на гибкие траты</p>
               <div class="spotlight-value" id="budget-remaining">1 012 €</div>
               <p class="spotlight-caption"><span id="budget-spent">0 €</span> потрачено из <span id="budget-limit">1 012 €</span></p>
+              <div class="budget-breakdown"><span>Доступно <strong id="budget-available">1 012 €</strong></span><span>Резерв <strong id="budget-reserved">0 €</strong></span><span>Свободно <strong id="budget-free">1 012 €</strong></span></div>
             </div>
             <div class="budget-meter-wrap">
               <div class="budget-meter"><div class="budget-meter-fill" id="budget-meter-fill"></div></div>
               <div class="budget-status" id="budget-status">Импортируйте выписку, чтобы увидеть прогресс</div>
+              <div class="budget-forecast" id="budget-forecast"></div>
             </div>
           </section>
 
@@ -94,9 +101,10 @@
             <article class="panel category-panel">
               <div class="panel-head"><div><h3>Структура трат</h3><p>Без переводов и наличных</p></div></div>
               <div class="donut-area">
-                <div class="donut" id="category-donut"><div class="donut-center"><strong id="donut-total">0 €</strong><span>расходы</span></div></div>
+                <div class="donut" id="category-donut" role="button" tabindex="0" aria-label="Открыть детализацию структуры трат"><div class="donut-center"><strong id="donut-total">0 €</strong><span>расходы</span></div></div>
                 <ul class="legend" id="category-legend"></ul>
               </div>
+              <div class="category-budget-summary" id="category-budget-summary"></div>
             </article>
           </section>
 
@@ -121,7 +129,12 @@
         <section class="view" id="weekly-view" data-view-panel="weekly">
           <div class="section-heading weekly-heading">
             <div><p class="eyebrow">План на ближайшие дни</p><h2>Неделя под контролем</h2></div>
-            <span class="week-date" id="week-range"></span>
+            <div class="week-navigation">
+              <button class="secondary-button" id="week-prev" type="button" aria-label="Предыдущая неделя">←</button>
+              <button class="text-button" id="week-today" type="button">Сегодня</button>
+              <button class="secondary-button" id="week-next" type="button" aria-label="Следующая неделя">→</button>
+              <span class="week-date" id="week-range"></span>
+            </div>
           </div>
           <section class="week-hero">
             <div class="week-hero-main"><p class="eyebrow">Можно потратить до конца недели</p><strong id="week-available">208 €</strong><p id="week-available-caption">из недельного лимита</p></div>
@@ -144,6 +157,18 @@
               <div class="shopping-list" id="shopping-list"></div>
             </article>
             <aside class="panel weekly-guide" id="weekly-guide"></aside>
+          </section>
+          <section class="panel plans-panel">
+            <div class="panel-head"><div><h3>Крупные покупки и цели</h3><p>Планируйте одежду, отдых, технику и другие важные расходы отдельно от факта</p></div><span class="shopping-total" id="plans-reserve">0 € / мес.</span></div>
+            <form id="plan-form" class="shopping-form plan-form">
+              <input name="title" required maxlength="80" placeholder="Например: зимняя одежда" aria-label="Название цели" />
+              <select name="type" aria-label="Тип цели"><option value="Одежда">Одежда</option><option value="Отдых">Отдых</option><option value="Техника">Техника</option><option value="Дом">Дом</option><option value="Подарок">Подарок</option><option value="Другое">Другое</option></select>
+              <input name="targetAmount" required min="0.01" step="0.01" type="number" placeholder="Цель, €" aria-label="Сумма цели" />
+              <input name="targetDate" required type="date" aria-label="Дата цели" />
+              <input name="savedAmount" min="0" step="0.01" type="number" placeholder="Уже отложено, €" aria-label="Уже отложенная сумма" />
+              <button class="primary-button" type="submit">Добавить цель</button>
+            </form>
+            <div class="plans-list" id="plans-list"></div>
           </section>
         </section>
 
@@ -198,6 +223,10 @@
               <div class="data-actions"><button class="secondary-button" id="export-backup">Экспорт JSON</button><button class="danger-button" id="clear-data">Удалить все данные</button></div>
             </section>
           </div>
+          <section class="panel category-budget-panel">
+            <div class="panel-head"><div><h3>Лимиты категорий</h3><p>План расходов на финансовый месяц. Пустое поле означает «без лимита».</p></div></div>
+            <form id="category-budget-form" class="category-budget-form"></form>
+          </section>
           <section class="panel bot-panel">
             <div class="panel-head"><div><h3>Telegram бот</h3><p>Отправляйте выписки и расходы прямо в группу</p></div></div>
             <details class="bot-setup-local">
@@ -241,6 +270,14 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+    <dialog id="category-dialog" class="dialog category-dialog">
+      <form method="dialog">
+        <div class="dialog-head"><div><p class="eyebrow">Детализация</p><h2 id="category-dialog-title">Структура трат</h2></div><button class="close-button" value="cancel" aria-label="Закрыть">×</button></div>
+        <div id="category-dialog-content" class="category-dialog-content"></div>
+        <div class="dialog-actions"><button class="primary-button" value="cancel">Закрыть</button></div>
+      </form>
+    </dialog>
+
     <dialog id="import-dialog" class="dialog import-dialog">
       <form method="dialog" id="import-form">
         <div class="dialog-head"><div><p class="eyebrow">Новые операции</p><h2>Импорт CSV-выписок</h2></div><button type="button" class="close-button" data-close-dialog="import-dialog" aria-label="Закрыть">×</button></div>
@@ -275,6 +312,7 @@
       <form method="dialog"><div class="dialog-head"><div><p class="eyebrow">О приложении</p><h2>Ваш бюджет, без облака</h2></div><button class="close-button" value="cancel" aria-label="Закрыть">×</button></div><p class="dialog-copy">Выписки обрабатываются на этом устройстве и хранятся в локальной SQLite-базе. Перед очисткой данных выгрузите резервную копию.</p><div class="dialog-actions"><button class="primary-button" value="cancel">Понятно</button></div></form>
     </dialog>
 
+    <script src="app-logic.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

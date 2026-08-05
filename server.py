@@ -36,6 +36,7 @@ DEFAULT_SETTINGS = {
     "reserve": 180,
     "uahPerEur": 51.8,
     "usdPerEur": 1.08,
+    "categoryLimits": {},
 }
 DEFAULT_PAYMENTS = [
     {"id": "rent", "day": 5, "name": "Аренда квартиры", "category": "Аренда", "amount": 820},
@@ -115,6 +116,16 @@ def initialize_database() -> None:
               payload TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS shopping_items_week_idx ON shopping_items(week_key);
+            CREATE TABLE IF NOT EXISTS plans (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              plan_type TEXT NOT NULL,
+              target_amount REAL NOT NULL,
+              saved_amount REAL NOT NULL DEFAULT 0,
+              target_date TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              payload TEXT NOT NULL
+            );
             """
         )
         if not db.execute("SELECT 1 FROM settings LIMIT 1").fetchone():
@@ -138,7 +149,8 @@ def database_state() -> dict:
         transactions = [json.loads(row["payload"]) for row in db.execute("SELECT payload FROM transactions ORDER BY operation_date")]
         paid = {f"{row['period_key']}:{row['payment_id']}": bool(row["paid"]) for row in db.execute("SELECT period_key, payment_id, paid FROM payment_status")}
         shopping_items = [json.loads(row["payload"]) for row in db.execute("SELECT payload FROM shopping_items ORDER BY week_key, name")]
-    return {"settings": settings, "payments": payments, "transactions": transactions, "paidPayments": paid, "shoppingItems": shopping_items}
+        plans = [json.loads(row["payload"]) for row in db.execute("SELECT payload FROM plans ORDER BY target_date, title")]
+    return {"settings": settings, "payments": payments, "transactions": transactions, "paidPayments": paid, "shoppingItems": shopping_items, "plans": plans}
 
 
 def truthy(value: object) -> int:
@@ -151,6 +163,7 @@ def replace_state(payload: dict) -> None:
     transactions = payload.get("transactions") if isinstance(payload.get("transactions"), list) else []
     paid_payments = payload.get("paidPayments") if isinstance(payload.get("paidPayments"), dict) else {}
     shopping_items = payload.get("shoppingItems") if isinstance(payload.get("shoppingItems"), list) else []
+    plans = payload.get("plans") if isinstance(payload.get("plans"), list) else []
 
     with connection() as db:
         db.execute("DELETE FROM settings")
@@ -204,6 +217,24 @@ def replace_state(payload: dict) -> None:
             """INSERT INTO shopping_items(id, week_key, name, price, bucket, essential, purchased, created_transaction_id, payload)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             shopping_rows,
+        )
+        db.execute("DELETE FROM plans")
+        plan_rows = []
+        for item in plans:
+            if not isinstance(item, dict) or not item.get("id") or not item.get("title") or not item.get("targetDate"):
+                continue
+            plan_rows.append(
+                (
+                    str(item["id"]), str(item["title"]), str(item.get("type", "Другое")),
+                    float(item.get("targetAmount", 0)), float(item.get("savedAmount", 0)),
+                    str(item["targetDate"]), str(item.get("status", "active")),
+                    json.dumps(item, ensure_ascii=False, separators=(",", ":")),
+                )
+            )
+        db.executemany(
+            """INSERT INTO plans(id, title, plan_type, target_amount, saved_amount, target_date, status, payload)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            plan_rows,
         )
 
 

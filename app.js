@@ -6,7 +6,7 @@ const CATEGORIES = ['Продукты', 'Кафе и досуг', 'Трансп�
 const FIXED_CATEGORIES = new Set(['Образование', 'Коммуналка и связь', 'Аренда']);
 
 const DEFAULT_STATE = {
-  settings: { income: 3200, savingsGoal: 800, weeklyLimit: 208, reserve: 180, uahPerEur: 51.8, usdPerEur: 1.08 },
+  settings: { income: 3200, savingsGoal: 800, weeklyLimit: 208, reserve: 180, uahPerEur: 51.8, usdPerEur: 1.08, categoryLimits: {} },
   transactions: [],
   payments: [
     { id: 'rent', day: 5, name: 'Аренда квартиры', category: 'Аренда', amount: 820 },
@@ -19,6 +19,9 @@ const DEFAULT_STATE = {
   ],
   paidPayments: {},
   shoppingItems: [],
+  plans: [],
+  selectedWeekKey: null,
+  selectedPeriodKey: null,
   transactionFilter: 'all',
   search: ''
 };
@@ -34,11 +37,14 @@ function cloneDefault() { return JSON.parse(JSON.stringify(DEFAULT_STATE)); }
 function normalizeState(saved) {
   return {
     ...cloneDefault(), ...saved,
-    settings: { ...DEFAULT_STATE.settings, ...(saved.settings || {}) },
+    settings: { ...DEFAULT_STATE.settings, ...(saved.settings || {}), categoryLimits: { ...(saved.settings?.categoryLimits || {}) } },
     payments: Array.isArray(saved.payments) && saved.payments.length ? saved.payments : cloneDefault().payments,
     transactions: Array.isArray(saved.transactions) ? saved.transactions : [],
     paidPayments: saved.paidPayments || {},
-    shoppingItems: Array.isArray(saved.shoppingItems) ? saved.shoppingItems : []
+    shoppingItems: Array.isArray(saved.shoppingItems) ? saved.shoppingItems : [],
+    plans: Array.isArray(saved.plans) ? saved.plans : [],
+    selectedWeekKey: typeof saved.selectedWeekKey === 'string' ? saved.selectedWeekKey : null,
+    selectedPeriodKey: typeof saved.selectedPeriodKey === 'string' ? saved.selectedPeriodKey : null
   };
 }
 async function hydrateState() {
@@ -93,6 +99,27 @@ function financialPeriod(reference = new Date()) {
   const end = new Date(start.getFullYear(), start.getMonth() + 1, 9, 23, 59, 59, 999);
   return { start, end, key: inputDate(start) };
 }
+function periodFromKey(key) {
+  const start = new Date(`${key}T00:00:00`);
+  if (Number.isNaN(start.getTime())) return financialPeriod();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 9, 23, 59, 59, 999);
+  return { start, end, key: inputDate(start) };
+}
+function activePeriod() {
+  return state.selectedPeriodKey ? periodFromKey(state.selectedPeriodKey) : financialPeriod();
+}
+function shiftPeriod(direction) {
+  const period = activePeriod();
+  state.selectedPeriodKey = FinanceLogic.movePeriodKey(period.key, direction);
+  saveState();
+  renderAll();
+}
+function selectCurrentPeriod() {
+  state.selectedPeriodKey = null;
+  saveState();
+  renderAll();
+}
 function periodLabel(period = financialPeriod()) {
   return `10 ${MONTHS_GEN[period.start.getMonth()]} — 9 ${MONTHS_GEN[period.end.getMonth()]}`;
 }
@@ -115,7 +142,7 @@ function periodWeeks(period) {
     const end = new Date(current);
     end.setDate(end.getDate() + 6); // +6 = Friday
     end.setHours(23, 59, 59, 999);
-    weeks.push({ start, end, label: `${start.getDate()}–${end.getDate()}`, number: weekNum });
+    weeks.push({ start, end, key: inputDate(start), label: `${start.getDate()}–${end.getDate()}`, number: weekNum });
     current = new Date(end);
     current.setDate(current.getDate() + 1);
     current.setHours(0, 0, 0, 0);
@@ -296,16 +323,28 @@ function runAutoClassify() {
 }
 
 function renderDashboard() {
-  const period = financialPeriod();
+  const period = activePeriod();
   const fixedPlan = sum(state.payments);
-  const budget = Math.max(0, state.settings.income - fixedPlan - state.settings.savingsGoal);
+  const plannedReserve = planReserve();
   const spent = sum(flexExpenses(period));
-  const remaining = budget - spent;
+  const snapshot = FinanceLogic.budgetSnapshot({
+    income: state.settings.income,
+    fixed: fixedPlan,
+    savings: state.settings.savingsGoal,
+    reserved: plannedReserve,
+    spent
+  });
+  const budget = Math.max(0, snapshot.available - snapshot.reserved);
+  const remaining = snapshot.free;
   const savings = actualSavings(period);
+  const totalDays = Math.max(1, Math.ceil((period.end - period.start) / 86400000) + 1);
+  const today = new Date();
+  const elapsedDays = Math.min(totalDays, Math.max(0, Math.floor((today - period.start) / 86400000) + 1));
+  const forecast = FinanceLogic.forecastSpend(spent, elapsedDays, totalDays);
   $('#period-label').textContent = periodLabel(period);
   $('#income-value').textContent = money(state.settings.income);
   $('#fixed-value').textContent = money(fixedPlan);
-  $('#fixed-foot').textContent = `${state.payments.length} плановых платежей`;
+  $('#fixed-foot').textContent = `${state.payments.length} платежей · ${money(plannedReserve)} зарезервировано на цели`;
   $('#savings-actual').textContent = money(savings);
   $('#savings-goal').textContent = money(state.settings.savingsGoal);
   $('#savings-progress').style.width = `${Math.min(100, state.settings.savingsGoal ? savings / state.settings.savingsGoal * 100 : 0)}%`;
@@ -313,12 +352,19 @@ function renderDashboard() {
   $('#budget-remaining').textContent = money(remaining);
   $('#budget-spent').textContent = money(spent);
   $('#budget-limit').textContent = money(budget);
+  $('#budget-available').textContent = money(snapshot.available);
+  $('#budget-reserved').textContent = money(snapshot.reserved);
+  $('#budget-free').textContent = money(snapshot.free);
   const use = budget ? spent / budget : 0;
   $('#budget-meter-fill').style.width = `${Math.min(use * 100, 100)}%`;
   $('#budget-meter-fill').style.background = use > 1 ? '#e05555' : use >= .85 ? '#c87c25' : '#2a1800';
   $('#budget-status').textContent = state.transactions.length === 0 ? 'Импортируйте выписку, чтобы увидеть прогресс' : remaining >= 0 ? `В запасе ${money(remaining)} до конца периода` : `Превышение плана на ${money(-remaining)}`;
+  $('#budget-forecast').textContent = forecast.projected > budget
+    ? `Прогноз: ${money(forecast.projected)} — превышение на ${money(forecast.projected - budget)}`
+    : `Прогноз до конца периода: ${money(forecast.projected)} — в пределах лимита`;
   renderWeekly(period);
   renderCategories(period);
+  renderCategoryBudgets(period);
   renderInsights(period);
   renderUpcoming(period);
   $('#cash-balance').textContent = money(cashBalance());
@@ -338,17 +384,38 @@ function renderWeekly(period) {
   const difference = Math.max(0, (state.settings.income - sum(state.payments) - state.settings.savingsGoal) - planned);
   $('#weekly-note').textContent = difference > 0 ? `В недельные конверты распределено ${money(planned)}. Резерв ${money(state.settings.reserve)} и ещё ${money(Math.max(0, difference - state.settings.reserve))} остаются вне недельных лимитов.` : 'Недельные конверты покрывают весь гибкий бюджет.';
 }
-function getActiveWeek(period = financialPeriod()) {
+function getActiveWeek(period = activePeriod()) {
   const weeks = periodWeeks(period);
   const today = new Date();
   today.setHours(12, 0, 0, 0);
   return weeks.find(week => isBetween(today, week.start, week.end)) || (today < period.start ? weeks[0] : weeks[weeks.length - 1]);
 }
+function getSelectedWeek(period = activePeriod()) {
+  const weeks = periodWeeks(period);
+  return weeks.find(week => week.key === state.selectedWeekKey) || getActiveWeek(period);
+}
+function selectWeek(direction) {
+  const period = activePeriod();
+  const weeks = periodWeeks(period);
+  state.selectedWeekKey = FinanceLogic.moveWeekKey(weeks, getSelectedWeek(period).key, direction);
+  saveState();
+  renderWeeklyView();
+}
+function selectCurrentWeek() {
+  state.selectedWeekKey = getActiveWeek().key;
+  saveState();
+  renderWeeklyView();
+}
 function sumByCategory(transactions, category) { return sum(transactions.filter(transaction => transaction.category === category)); }
 function shoppingTotal(items) { return items.reduce((total, item) => total + (Number(item.price) || 0), 0); }
+function planReserve() {
+  return state.plans
+    .filter(plan => plan.status !== 'completed')
+    .reduce((total, plan) => total + FinanceLogic.planMetrics(plan).monthlyNeeded, 0);
+}
 function renderWeeklyView() {
-  const period = financialPeriod();
-  const week = getActiveWeek(period);
+  const period = activePeriod();
+  const week = getSelectedWeek(period);
   const weeks = periodWeeks(period);
   const currentIndex = weeks.findIndex(item => item.number === week.number);
   const weekTransactions = flexExpenses(period).filter(transaction => isBetween(toDate(transaction.date), week.start, week.end));
@@ -371,6 +438,8 @@ function renderWeeklyView() {
   const midweekShopping = shoppingItems.filter(item => item.bucket === 'midweek');
   const DOW_SHORT = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
   $('#week-range').textContent = `Неделя ${week.number}: ${DOW_SHORT[week.start.getDay()]} ${displayDate(week.start)} — ${DOW_SHORT[week.end.getDay()]} ${displayDate(week.end)}`;
+  $('#week-prev').disabled = currentIndex <= 0;
+  $('#week-next').disabled = currentIndex >= weeks.length - 1;
   $('#week-available').textContent = money(remaining);
   $('#week-available-caption').textContent = remaining >= 0 ? `из ${money(state.settings.weeklyLimit)} на эту неделю` : `перерасход на ${money(-remaining)}`;
   $('#week-daily').textContent = money(Math.max(0, remaining) / daysLeft);
@@ -400,19 +469,74 @@ function renderWeeklyView() {
   $$('#shopping-list [data-shopping-item]').forEach(button => button.addEventListener('click', () => toggleShoppingPurchased(button.dataset.shoppingItem)));
   $$('#shopping-list [data-delete-item]').forEach(button => button.addEventListener('click', () => deleteShoppingItem(button.dataset.deleteItem)));
   $('#weekly-guide').innerHTML = `<div class="panel-head"><div><h3>Небольшой план</h3><p>Чтобы бюджет не ощущался запретом</p></div><span class="spark">✦</span></div><div class="guide-point"><strong>Перед основной закупкой</strong><p>Корзина сейчас на ${money(shoppingTotal(bigShopping))}. До лимита 130 € ${shoppingTotal(bigShopping) <= 130 ? `ещё ${money(130 - shoppingTotal(bigShopping))}` : `перебор на ${money(shoppingTotal(bigShopping) - 130)}`}.</p></div><div class="guide-point"><strong>Покупка прямо сейчас</strong><p>${remaining > 0 ? `Безопасный ориентир — до ${money(Math.max(0, remaining) / daysLeft)} в день до ${displayDate(week.end)}.` : 'Неделя уже вышла за лимит: лучше использовать только обязательные покупки.'}</p></div><div class="guide-point"><strong>Что переносится</strong><p>Остаток кафе переносится в следующую неделю. Перерасход по продуктам уменьшит её продуктовый конверт.</p></div>`;
+  renderPlans();
 }
 function renderCategories(period) {
-  const grouped = {};
-  flexExpenses(period).forEach(transaction => { grouped[transaction.category] = (grouped[transaction.category] || 0) + transaction.baseAmount; });
-  const groups = Object.entries(grouped).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  const total = groups.reduce((number, [, value]) => number + value, 0);
+  const expenses = flexExpenses(period);
+  const summary = FinanceLogic.categorySummary(expenses);
+  const visible = summary.length > 6
+    ? [...summary.slice(0, 5), {
+      category: 'Прочее',
+      amount: summary.slice(5).reduce((total, item) => total + item.amount, 0),
+      share: summary.slice(5).reduce((total, item) => total + item.share, 0),
+      count: summary.slice(5).reduce((total, item) => total + item.count, 0)
+    }]
+    : summary;
+  const total = summary.reduce((number, item) => number + item.amount, 0);
   let angle = 0;
-  const slices = groups.map(([, value], index) => {
-    const next = angle + (total ? value / total * 360 : 0); const piece = `${CATEGORY_COLORS[index]} ${angle}deg ${next}deg`; angle = next; return piece;
+  const slices = visible.map((item, index) => {
+    const next = angle + (total ? item.amount / total * 360 : 0); const piece = `${CATEGORY_COLORS[index]} ${angle}deg ${next}deg`; angle = next; return piece;
   });
   $('#category-donut').style.background = slices.length ? `conic-gradient(${slices.join(', ')})` : 'conic-gradient(#e8eeeb 0deg 360deg)';
   $('#donut-total').textContent = money(total);
-  $('#category-legend').innerHTML = groups.length ? groups.map(([category, value], index) => `<li><span class="legend-dot" style="background:${CATEGORY_COLORS[index]}"></span><span class="legend-name">${esc(category)}</span><span class="legend-value">${Math.round(value / total * 100)}%</span></li>`).join('') : '<li><span class="legend-name">Пока нет расходов в этом периоде</span></li>';
+  $('#category-legend').innerHTML = visible.length ? visible.map((item, index) => `<li class="legend-item" tabindex="0" role="button" data-category="${esc(item.category)}"><span class="legend-dot" style="background:${CATEGORY_COLORS[index]}"></span><span class="legend-name">${esc(item.category)}</span><span class="legend-value">${item.share}% · ${money(item.amount)}</span></li>`).join('') : '<li><span class="legend-name">Пока нет расходов в этом периоде</span></li>';
+  $$('#category-legend [data-category]').forEach(item => {
+    item.addEventListener('click', () => showCategoryDetails(item.dataset.category, period));
+    item.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') showCategoryDetails(item.dataset.category, period); });
+  });
+  const donut = $('#category-donut');
+  donut.onclick = () => showCategoryDetails(null, period);
+  donut.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') showCategoryDetails(null, period); };
+}
+function renderCategoryBudgets(period) {
+  const limits = state.settings.categoryLimits || {};
+  const summary = FinanceLogic.categoryBudgetSummary(flexExpenses(period), limits);
+  $('#category-budget-summary').innerHTML = summary.length
+    ? summary.map(item => `<div class="category-budget-row"><span>${esc(item.category)}</span><strong class="${item.over ? 'is-over' : ''}">${money(item.actual)} / ${money(item.limit)}</strong><small>${item.over ? `перерасход ${money(-item.remaining)}` : `осталось ${money(item.remaining)}`}</small><div class="category-budget-track"><span class="${item.over ? 'is-over' : ''}" style="width:${item.progress}%"></span></div></div>`).join('')
+    : '<p class="form-hint">Задайте лимиты в настройках, чтобы видеть план против факта.</p>';
+}
+function showCategoryDetails(category, period) {
+  const expenses = flexExpenses(period);
+  const summary = FinanceLogic.categorySummary(expenses);
+  const topCategories = new Set(summary.slice(0, 5).map(item => item.category));
+  const selected = category === 'Прочее'
+    ? expenses.filter(transaction => !topCategories.has(transaction.category))
+    : category
+      ? expenses.filter(transaction => transaction.category === category)
+      : expenses;
+  const amount = sum(selected);
+  const total = sum(expenses);
+  const merchants = {};
+  selected.forEach(transaction => {
+    const name = transaction.description || 'Без описания';
+    merchants[name] = (merchants[name] || 0) + (Number(transaction.baseAmount) || 0);
+  });
+  const topMerchants = Object.entries(merchants).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  $('#category-dialog-title').textContent = category || 'Структура трат';
+  $('#category-dialog-content').innerHTML = `
+    <div class="category-detail-summary"><strong>${money(amount)}</strong><span>${total ? Math.round(amount / total * 100) : 0}% всех гибких расходов · ${selected.length} операций</span></div>
+    <h3>${category ? 'Крупнейшие продавцы' : 'Все категории'}</h3>
+    <ul class="category-detail-list">${category ? topMerchants.map(([name, value]) => `<li><span>${esc(name)}</span><strong>${money(value)}</strong></li>`).join('') : summary.map(item => `<li><span>${esc(item.category)} · ${item.count} оп.</span><strong>${money(item.amount)} · ${item.share}%</strong></li>`).join('')}</ul>
+    <p class="form-hint">Период: ${esc(periodLabel(period))}</p>`;
+  $('#category-dialog').showModal();
+}
+function renderPlans() {
+  const plans = state.plans.filter(plan => plan.status !== 'completed');
+  $('#plans-reserve').textContent = `${money(planReserve())} / мес.`;
+  $('#plans-list').innerHTML = plans.length ? plans.map(plan => {
+    const metrics = FinanceLogic.planMetrics(plan);
+    return `<article class="plan-card"><div class="plan-card-head"><div><span class="chip chip-neutral">${esc(plan.type)}</span><h3>${esc(plan.title)}</h3></div><strong>${money(metrics.remaining)}</strong></div><div class="plan-progress"><span style="width:${metrics.progress}%"></span></div><div class="plan-card-meta"><span>${money(metrics.saved)} из ${money(Number(plan.targetAmount) || 0)}</span><span>до ${esc(plan.targetDate)} · ${money(metrics.monthlyNeeded)}/мес.</span></div></article>`;
+  }).join('') : '<div class="empty-state">Добавьте цель для одежды, отдыха или крупной покупки.</div>';
 }
 function renderInsights(period) {
   const expenses = flexExpenses(period);
@@ -437,7 +561,7 @@ function renderUpcoming(period) {
 }
 
 function renderTransactions() {
-  const period = financialPeriod();
+  const period = activePeriod();
   const query = state.search.toLocaleLowerCase();
   const filtered = transactionsForPeriod(period).filter(transaction => {
     const matchFilter = state.transactionFilter === 'all' || (state.transactionFilter === 'transfer' ? transaction.type === 'transfer' : transaction.type === state.transactionFilter);
@@ -468,7 +592,7 @@ function categoryOptions(selected, type) {
 }
 
 function renderCalendar() {
-  const period = financialPeriod();
+  const period = activePeriod();
   const payments = state.payments.map(payment => ({ ...payment, date: paymentDate(payment, period) })).sort((a, b) => a.date - b.date);
   const total = sum(payments);
   const paid = payments.filter(payment => state.paidPayments[`${period.key}:${payment.id}`]);
@@ -495,11 +619,17 @@ function renderSettings() {
   const fxForm = $('#fx-form');
   fxForm.uahPerEur.value = state.settings.uahPerEur;
   fxForm.usdPerEur.value = state.settings.usdPerEur;
+  renderCategoryLimitForm();
   $('#data-count').textContent = state.transactions.length;
   $('#account-count').textContent = new Set(state.transactions.map(transaction => transaction.accountId)).size;
   const databaseStatus = $('#database-status');
   databaseStatus.textContent = serverOnline ? 'SQLite подключена: данные сохраняются в data/finance.db на этом устройстве.' : 'Локальная база недоступна. Запускайте приложение через «Запустить приложение.cmd».';
   databaseStatus.className = `database-status ${serverOnline ? 'is-online' : 'is-offline'}`;
+}
+function renderCategoryLimitForm() {
+  const limits = state.settings.categoryLimits || {};
+  const categories = CATEGORIES.filter(category => !['Накопления', 'Неразобранное'].includes(category));
+  $('#category-budget-form').innerHTML = `${categories.map(category => `<label>${esc(category)}<input data-category-limit="${esc(category)}" type="number" min="0" step="1" placeholder="Без лимита" value="${limits[category] || ''}" /></label>`).join('')}<button class="primary-button" type="submit">Сохранить лимиты</button>`;
 }
 function renderAll() { runTransferMatching(); renderDashboard(); renderWeeklyView(); renderTransactions(); renderCalendar(); renderSettings(); }
 
@@ -546,6 +676,24 @@ function addManualTransaction(form) {
     baseAmount: value, conversion: 'ручной ввод', type: entryType, category: data.get('category'), manualCategory: true
   });
   saveState(); renderAll(); $('#cash-dialog').close(); form.reset(); showToast('Операция добавлена');
+}
+function addPlan(form) {
+  const data = new FormData(form);
+  const targetAmount = Number(data.get('targetAmount'));
+  if (!targetAmount || !data.get('title') || !data.get('targetDate')) return;
+  state.plans.push({
+    id: simpleHash(`plan|${Date.now()}|${Math.random()}`),
+    title: String(data.get('title')).trim(),
+    type: String(data.get('type') || 'Другое'),
+    targetAmount,
+    savedAmount: Math.max(0, Number(data.get('savedAmount')) || 0),
+    targetDate: String(data.get('targetDate')),
+    status: 'active'
+  });
+  saveState();
+  form.reset();
+  renderAll();
+  showToast('Цель добавлена');
 }
 function exportBackup() {
   const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), ...state }, null, 2)], { type: 'application/json' });
@@ -656,6 +804,9 @@ function setupEvents() {
     if (preview) preview.hidden = true;
   }));
   $('#open-settings').addEventListener('click', () => activateView('settings'));
+  $('#period-prev').addEventListener('click', () => shiftPeriod(-1));
+  $('#period-next').addEventListener('click', () => shiftPeriod(1));
+  $('#period-current').addEventListener('click', selectCurrentPeriod);
   $('#open-import').addEventListener('click', () => $('#import-dialog').showModal());
   $('#transactions-import').addEventListener('click', () => $('#import-dialog').showModal());
   $('#csv-files').addEventListener('change', event => previewFiles([...event.target.files]));
@@ -671,6 +822,16 @@ function setupEvents() {
     saveState(); renderAll(); $('#payment-dialog').close(); showToast('План платежей обновлён');
   });
   $('#budget-form').addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); ['income', 'savingsGoal', 'weeklyLimit', 'reserve'].forEach(key => state.settings[key] = Math.max(0, Number(data.get(key)) || 0)); saveState(); renderAll(); showToast('План месяца сохранён'); });
+  $('#category-budget-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const limits = {};
+    $$('[data-category-limit]').forEach(input => {
+      const value = Number(input.value);
+      if (value > 0) limits[input.dataset.categoryLimit] = value;
+    });
+    state.settings.categoryLimits = limits;
+    saveState(); renderAll(); showToast('Лимиты категорий сохранены');
+  });
   $('#fx-form').addEventListener('submit', event => { event.preventDefault(); const data = new FormData(event.currentTarget); state.settings.uahPerEur = Math.max(.01, Number(data.get('uahPerEur')) || 51.8); state.settings.usdPerEur = Math.max(.01, Number(data.get('usdPerEur')) || 1.08); state.transactions.forEach(transaction => { if (transaction.imported) { const converted = baseAmount(transaction.operationAmount, transaction.currency); transaction.baseAmount = converted.value; transaction.conversion = converted.method; } }); saveState(); renderAll(); showToast('Курсы пересчитаны для импортированных операций'); });
   $$('#type-filters .filter').forEach(button => button.addEventListener('click', () => { state.transactionFilter = button.dataset.filter; $$('#type-filters .filter').forEach(item => item.classList.toggle('is-selected', item === button)); renderTransactions(); }));
   $('#transaction-search').addEventListener('input', event => { state.search = event.target.value; renderTransactions(); });
@@ -679,10 +840,14 @@ function setupEvents() {
     const data = new FormData(event.currentTarget);
     const price = Number(data.get('price'));
     if (!price) return;
-    const week = getActiveWeek();
+    const week = getSelectedWeek();
     state.shoppingItems.push({ id: simpleHash(`shopping|${Date.now()}|${Math.random()}`), weekKey: inputDate(week.start), name: String(data.get('name')).trim(), price, bucket: data.get('bucket'), essential: data.get('essential') !== '0', purchased: false });
     saveState(); event.currentTarget.reset(); renderWeeklyView(); showToast('Позиция добавлена в список покупок');
   });
+  $('#week-prev').addEventListener('click', () => selectWeek(-1));
+  $('#week-next').addEventListener('click', () => selectWeek(1));
+  $('#week-today').addEventListener('click', selectCurrentWeek);
+  $('#plan-form').addEventListener('submit', event => { event.preventDefault(); addPlan(event.currentTarget); });
   $('#export-backup').addEventListener('click', exportBackup);
   $('#clear-data').addEventListener('click', () => { if (!confirm('Удалить все импортированные операции, наличные и отметки платежей из этого браузера?')) return; state = cloneDefault(); saveState(); renderAll(); showToast('Локальные данные удалены'); });
   $('#open-help').addEventListener('click', () => $('#help-dialog').showModal());
