@@ -1,11 +1,16 @@
 import tempfile
 import unittest
+import logging
 from pathlib import Path
 
 import bot
 
 
 class BotHelpersTests(unittest.TestCase):
+    def test_telegram_http_loggers_do_not_emit_info_urls(self):
+        for logger_name in ("httpx", "httpcore", "telegram.request"):
+            self.assertGreaterEqual(logging.getLogger(logger_name).level, logging.WARNING)
+
     def test_parse_amount_supports_currency_and_decimal_comma(self):
         self.assertEqual(bot.parse_amount("500 грн"), (500.0, "UAH"))
         self.assertEqual(bot.parse_amount("12,5"), (12.5, "EUR"))

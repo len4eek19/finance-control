@@ -87,6 +87,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     level=logging.INFO,
 )
+# httpx logs full Telegram API URLs at INFO, including the bot token.
+for _logger_name in ("httpx", "httpcore", "telegram.request"):
+    logging.getLogger(_logger_name).setLevel(logging.WARNING)
 log = logging.getLogger("finbot")
 
 # ─────────────────────────────────────────── conversation states ──
